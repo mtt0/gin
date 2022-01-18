@@ -2,7 +2,7 @@
 
 <img align="right" width="159px" src="https://raw.githubusercontent.com/gin-gonic/logo/master/color.png">
 
-[![Build Status](https://travis-ci.org/gin-gonic/gin.svg)](https://travis-ci.org/gin-gonic/gin)
+[![Build Status](https://github.com/gin-gonic/gin/workflows/Run%20Tests/badge.svg?branch=master)](https://github.com/gin-gonic/gin/actions?query=branch%3Amaster)
 [![codecov](https://codecov.io/gh/gin-gonic/gin/branch/master/graph/badge.svg)](https://codecov.io/gh/gin-gonic/gin)
 [![Go Report Card](https://goreportcard.com/badge/github.com/gin-gonic/gin)](https://goreportcard.com/report/github.com/gin-gonic/gin)
 [![GoDoc](https://pkg.go.dev/badge/github.com/gin-gonic/gin?status.svg)](https://pkg.go.dev/github.com/gin-gonic/gin?tab=doc)
@@ -78,6 +78,7 @@ Gin is a web framework written in Go (Golang). It features a martini-like API wi
     - [http2 server push](#http2-server-push)
     - [Define format for the log of routes](#define-format-for-the-log-of-routes)
     - [Set and get a cookie](#set-and-get-a-cookie)
+  - [Don't trust all proxies](#dont-trust-all-proxies)
   - [Testing](#testing)
   - [Users](#users)
 
@@ -256,14 +257,15 @@ func main() {
 
 	// For each matched request Context will hold the route definition
 	router.POST("/user/:name/*action", func(c *gin.Context) {
-		c.FullPath() == "/user/:name/*action" // true
+		b := c.FullPath() == "/user/:name/*action" // true
+		c.String(http.StatusOK, "%t", b)
 	})
 
 	// This handler will add a new router for /user/groups.
 	// Exact routes are resolved before param routes, regardless of the order they were defined.
 	// Routes starting with /user/groups are never interpreted as /user/:name/... routes
 	router.GET("/user/groups", func(c *gin.Context) {
-		c.String(http.StatusOK, "The available groups are [...]", name)
+		c.String(http.StatusOK, "The available groups are [...]")
 	})
 
 	router.Run(":8080")
@@ -382,8 +384,8 @@ func main() {
 	// Set a lower memory limit for multipart forms (default is 32 MiB)
 	router.MaxMultipartMemory = 8 << 20  // 8 MiB
 	router.POST("/upload", func(c *gin.Context) {
-		// single file
-		file, _ := c.FormFile("file")
+		// Single file
+		file, _ := c.FormFile("Filename")
 		log.Println(file.Filename)
 
 		// Upload the file to specific dst.
@@ -415,7 +417,7 @@ func main() {
 	router.POST("/upload", func(c *gin.Context) {
 		// Multipart form
 		form, _ := c.MultipartForm()
-		files := form.File["upload[]"]
+		files := form.File["Filename[]"]
 
 		for _, file := range files {
 			log.Println(file.Filename)
@@ -702,7 +704,7 @@ func main() {
 	// Example for binding XML (
 	//	<?xml version="1.0" encoding="UTF-8"?>
 	//	<root>
-	//		<user>user</user>
+	//		<user>manu</user>
 	//		<password>123</password>
 	//	</root>)
 	router.POST("/loginXML", func(c *gin.Context) {
@@ -904,7 +906,7 @@ func startPage(c *gin.Context) {
 	var person Person
 	// If `GET`, only `Form` binding engine (`query`) used.
 	// If `POST`, first checks the `content-type` for `JSON` or `XML`, then uses `Form` (`form-data`).
-	// See more at https://github.com/gin-gonic/gin/blob/master/binding/binding.go#L48
+	// See more at https://github.com/gin-gonic/gin/blob/master/binding/binding.go#L88
         if c.ShouldBind(&person) == nil {
                 log.Println(person.Name)
                 log.Println(person.Address)
@@ -1826,7 +1828,7 @@ func main() {
 	quit := make(chan os.Signal)
 	// kill (no param) default send syscall.SIGTERM
 	// kill -2 is syscall.SIGINT
-	// kill -9 is syscall.SIGKILL but can't be catch, so don't need add it
+	// kill -9 is syscall.SIGKILL but can't be caught, so don't need to add it
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
 	log.Println("Shutting down server...")
@@ -1999,7 +2001,7 @@ func SomeHandler(c *gin.Context) {
   objA := formA{}
   objB := formB{}
   // This reads c.Request.Body and stores the result into the context.
-  if errA := c.ShouldBindBodyWith(&objA, binding.JSON); errA == nil {
+  if errA := c.ShouldBindBodyWith(&objA, binding.Form); errA == nil {
     c.String(http.StatusOK, `the body should be formA`)
   // At this time, it reuses body stored in the context.
   } else if errB := c.ShouldBindBodyWith(&objB, binding.JSON); errB == nil {
@@ -2201,10 +2203,16 @@ Gin lets you specify which headers to hold the real client IP (if any),
 as well as specifying which proxies (or direct clients) you trust to
 specify one of these headers.
 
-The `TrustedProxies` slice on your `gin.Engine` specifes network addresses or
-network CIDRs from where clients which their request headers related to client
+Use function `SetTrustedProxies()` on your `gin.Engine` to specify network addresses
+or network CIDRs from where clients which their request headers related to client
 IP can be trusted. They can be IPv4 addresses, IPv4 CIDRs, IPv6 addresses or
 IPv6 CIDRs.
+
+**Attention:** Gin trust all proxies by default if you don't specify a trusted 
+proxy using the function above, **this is NOT safe**. At the same time, if you don't
+use any proxy, you can disable this feature by using `Engine.SetTrustedProxies(nil)`,
+then `Context.ClientIP()` will return the remote address directly to avoid some
+unnecessary computation.
 
 ```go
 import (
@@ -2216,13 +2224,41 @@ import (
 func main() {
 
 	router := gin.Default()
-	router.TrustedProxies = []string{"192.168.1.2"}
+	router.SetTrustedProxies([]string{"192.168.1.2"})
 
 	router.GET("/", func(c *gin.Context) {
 		// If the client is 192.168.1.2, use the X-Forwarded-For
 		// header to deduce the original client IP from the trust-
 		// worthy parts of that header.
 		// Otherwise, simply return the direct client IP
+		fmt.Printf("ClientIP: %s\n", c.ClientIP())
+	})
+	router.Run()
+}
+```
+
+**Notice:** If you are using a CDN service, you can set the `Engine.TrustedPlatform`
+to skip TrustedProxies check, it has a higher priority than TrustedProxies. 
+Look at the example below:
+```go
+import (
+	"fmt"
+
+	"github.com/gin-gonic/gin"
+)
+
+func main() {
+
+	router := gin.Default()
+	// Use predefined header gin.PlatformXXX
+	router.TrustedPlatform = gin.PlatformGoogleAppEngine
+	// Or set your own trusted request header for another trusted proxy service
+	// Don't set it to any suspect request header, it's unsafe
+	router.TrustedPlatform = "X-CDN-IP"
+
+	router.GET("/", func(c *gin.Context) {
+		// If you set TrustedPlatform, ClientIP() will resolve the
+		// corresponding header and return IP directly
 		fmt.Printf("ClientIP: %s\n", c.ClientIP())
 	})
 	router.Run()

@@ -16,9 +16,17 @@ import (
 	"github.com/gin-gonic/gin/internal/json"
 )
 
-var errUnknownType = errors.New("unknown type")
+var (
+	errUnknownType = errors.New("unknown type")
 
-func mapUri(ptr interface{}, m map[string][]string) error {
+	// ErrConvertMapStringSlice can not covert to map[string][]string
+	ErrConvertMapStringSlice = errors.New("can not convert to map slices of strings")
+
+	// ErrConvertToMapString can not convert to map[string]string
+	ErrConvertToMapString = errors.New("can not convert to map of strings")
+)
+
+func mapURI(ptr interface{}, m map[string][]string) error {
 	return mapFormByTag(ptr, m, "uri")
 }
 
@@ -53,7 +61,7 @@ func mapFormByTag(ptr interface{}, form map[string][]string, tag string) error {
 
 // setter tries to set value on a walking by fields of a struct
 type setter interface {
-	TrySet(value reflect.Value, field reflect.StructField, key string, opt setOptions) (isSetted bool, err error)
+	TrySet(value reflect.Value, field reflect.StructField, key string, opt setOptions) (isSet bool, err error)
 }
 
 type formSource map[string][]string
@@ -61,7 +69,7 @@ type formSource map[string][]string
 var _ setter = formSource(nil)
 
 // TrySet tries to set a value by request's form source (like map[string][]string)
-func (form formSource) TrySet(value reflect.Value, field reflect.StructField, tagValue string, opt setOptions) (isSetted bool, err error) {
+func (form formSource) TrySet(value reflect.Value, field reflect.StructField, tagValue string, opt setOptions) (isSet bool, err error) {
 	return setByForm(value, field, form, tagValue, opt)
 }
 
@@ -75,7 +83,7 @@ func mapping(value reflect.Value, field reflect.StructField, setter setter, tag 
 		return false, nil
 	}
 
-	var vKind = value.Kind()
+	vKind := value.Kind()
 
 	if vKind == reflect.Ptr {
 		var isNew bool
@@ -84,14 +92,14 @@ func mapping(value reflect.Value, field reflect.StructField, setter setter, tag 
 			isNew = true
 			vPtr = reflect.New(value.Type().Elem())
 		}
-		isSetted, err := mapping(vPtr.Elem(), field, setter, tag)
+		isSet, err := mapping(vPtr.Elem(), field, setter, tag)
 		if err != nil {
 			return false, err
 		}
-		if isNew && isSetted {
+		if isNew && isSet {
 			value.Set(vPtr)
 		}
-		return isSetted, nil
+		return isSet, nil
 	}
 
 	if vKind != reflect.Struct || !field.Anonymous {
@@ -107,19 +115,19 @@ func mapping(value reflect.Value, field reflect.StructField, setter setter, tag 
 	if vKind == reflect.Struct {
 		tValue := value.Type()
 
-		var isSetted bool
+		var isSet bool
 		for i := 0; i < value.NumField(); i++ {
 			sf := tValue.Field(i)
 			if sf.PkgPath != "" && !sf.Anonymous { // unexported
 				continue
 			}
-			ok, err := mapping(value.Field(i), tValue.Field(i), setter, tag)
+			ok, err := mapping(value.Field(i), sf, setter, tag)
 			if err != nil {
 				return false, err
 			}
-			isSetted = isSetted || ok
+			isSet = isSet || ok
 		}
-		return isSetted, nil
+		return isSet, nil
 	}
 	return false, nil
 }
@@ -156,7 +164,7 @@ func tryToSetValue(value reflect.Value, field reflect.StructField, setter setter
 	return setter.TrySet(value, field, tagValue, setOpt)
 }
 
-func setByForm(value reflect.Value, field reflect.StructField, form map[string][]string, tagValue string, opt setOptions) (isSetted bool, err error) {
+func setByForm(value reflect.Value, field reflect.StructField, form map[string][]string, tagValue string, opt setOptions) (isSet bool, err error) {
 	vs, ok := form[tagValue]
 	if !ok && !opt.isDefaultExists {
 		return false, nil
@@ -202,7 +210,7 @@ func setWithProperType(val string, value reflect.Value, field reflect.StructFiel
 	case reflect.Int64:
 		switch value.Interface().(type) {
 		case time.Duration:
-			return setTimeDuration(val, value, field)
+			return setTimeDuration(val, value)
 		}
 		return setIntField(val, 64, value)
 	case reflect.Uint:
@@ -302,7 +310,6 @@ func setTimeField(val string, structField reflect.StructField, value reflect.Val
 		t := time.Unix(tv/int64(d), tv%int64(d))
 		value.Set(reflect.ValueOf(t))
 		return nil
-
 	}
 
 	if val == "" {
@@ -352,7 +359,7 @@ func setSlice(vals []string, value reflect.Value, field reflect.StructField) err
 	return nil
 }
 
-func setTimeDuration(val string, value reflect.Value, field reflect.StructField) error {
+func setTimeDuration(val string, value reflect.Value) error {
 	d, err := time.ParseDuration(val)
 	if err != nil {
 		return err
@@ -375,7 +382,7 @@ func setFormMap(ptr interface{}, form map[string][]string) error {
 	if el.Kind() == reflect.Slice {
 		ptrMap, ok := ptr.(map[string][]string)
 		if !ok {
-			return errors.New("cannot convert to map slices of strings")
+			return ErrConvertMapStringSlice
 		}
 		for k, v := range form {
 			ptrMap[k] = v
@@ -386,7 +393,7 @@ func setFormMap(ptr interface{}, form map[string][]string) error {
 
 	ptrMap, ok := ptr.(map[string]string)
 	if !ok {
-		return errors.New("cannot convert to map of strings")
+		return ErrConvertToMapString
 	}
 	for k, v := range form {
 		ptrMap[k] = v[len(v)-1] // pick last
